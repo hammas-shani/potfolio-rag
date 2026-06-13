@@ -1,4 +1,9 @@
 .venv/
 __pycache__/
 .env
-dataset/
+dataset/.venv/
+.env
+__pycache__/
+vector_db/
+semantic_cache_db/
+.langchain.db
