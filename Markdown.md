@@ -1,3 +1,4 @@
+```mermaid
 graph TD
     %% Styling
     classDef source fill:#f9f871,stroke:#333,stroke-width:2px;
