@@ -1,0 +1,18 @@
+# UI Framework
+chainlit
+
+# LangChain Core & Integrations
+langchain
+langchain-community
+langchain-groq
+
+# Vector Database (Local aur sab se simple)
+chromadb
+
+# Embeddings (Groq embeddings nahi deta, isliye hum free local embeddings use karenge)
+langchain-huggingface
+sentence-transformers
+
+# Utilities
+python-dotenv
+requests
