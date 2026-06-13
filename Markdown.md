@@ -30,8 +30,8 @@ graph TD
     G -->|Check Similarity| H
     
     %% Cache Hit/Miss Logic
-    H -- Cache Hit -->|Return Fast Answer| G
-    H -- Cache Miss -->|Search Context| E
+    H -->|Cache Hit: Return Fast Answer| G
+    H -->|Cache Miss: Search Context| E
     E -->|Provide Context| I
     I -->|Generate Answer| H
     H -->|Save New Answer| G
