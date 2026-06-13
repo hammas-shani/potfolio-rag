@@ -9,7 +9,7 @@ load_dotenv()
 # Environment variables se token extract karein
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
-GITHUB_USERNAME = "https://github.com/hammas-shani" # Apna GitHub username yahan dalen
+GITHUB_USERNAME = "hammas-shani" # Apna GitHub username yahan dalen
 DATASET_DIR = "dataset"
 
 
