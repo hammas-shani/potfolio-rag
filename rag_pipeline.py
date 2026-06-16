@@ -42,7 +42,7 @@ def build_vector_db():
 
     # Native Python file scanning to avoid community deprecations
     for file_path in dataset_path.rglob("*.*"):
-        if file_path.is_file() and file_path.suffix in ['.txt', '.md']:
+        if file_path.is_file() and file_path.suffix in ['.txt', '.md' , '.json']:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -57,8 +57,8 @@ def build_vector_db():
     print(f"Successfully processed {len(docs)} document(s). Splitting into chunks...")
     text_splitter = RecursiveCharacterTextSplitter(
         separators=["\n\n", "\n", ".", " "], 
-        chunk_size=400, 
-        chunk_overlap=50 
+        chunk_size=2000,
+        chunk_overlap=400
     )
     chunks = text_splitter.split_documents(docs)
 
@@ -69,7 +69,7 @@ def build_vector_db():
 
 def get_rag_chain():
     vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-    retriever = vector_db.as_retriever(search_kwargs={"k": 3})
+    retriever = vector_db.as_retriever(search_kwargs={"k": 6})
 
     llm = ChatGroq(
         groq_api_key=os.getenv("GROQ_API_KEY"),
@@ -78,18 +78,32 @@ def get_rag_chain():
     )
 
     system_prompt = (
-       "Tum Hammas Shahzad Shani (jo ke ek expert AI Engineer hai) ke personal AI Assistant ho.\n"
-        "Tumhara tone bohat casual, friendly, aur natural hona chahiye. Kitabi zaban (jaise 'Maaf kijiyega', 'Baraye meharbani') bilkul use nahi karni. "
-        "Aise baat karo jaise aam dosti mein chat hoti hai (words use karo jaise 'haan', 'nh', 'tw', 'yar', 'masla', 'acha').\n\n"
+        "You are the official AI Assistant for Hammas Shahzad Shani, an AI/ML Engineer. "
+        "Your role is to answer questions about his professional background using ONLY the provided CONTEXT.\n\n"
         
-        "CRITICAL RULES FOR YOU:\n"
-        "1. LANGUAGE STRICTNESS: Agar user pure English mein sawal kare, tw answer purely simple English mein do. Agar Roman Urdu mein kare, tw answer purely Roman Urdu mein do. Mix mat karna.\n"
-        "2. NO HALLUCINATION: Sirf diye gaye Context se answer do. Agar user GitHub, LinkedIn, WhatsApp, portfolio (jaise www.mmuzammilshah.me) ya email mange aur wo context mein na ho, tw KHUD SE KUCH INVENT NAHI KARNA. "
-        "Simple natural way mein bol do: 'Yar mujhe exact link abhi mil nahi raha, shayad context mein update nahi hai.'\n"
-        "3. IDENTITY: Hammas ka professional naam 'Hammas Shahzad Shani' hai. Kisi aur naam se refer mat karna.\n"
-        "4. SHORT & TO THE POINT: Lamba lamba essay nahi likhna. Direct answer do.\n\n"
+        "STRICT GROUNDING RULES:\n"
+        "- ONLY state facts that are explicitly present in the CONTEXT.\n"
+        "- Do NOT invent, assume, guess, or generalize projects, technologies, or details.\n"
+        "- Do NOT explain general concepts (e.g., 'what is OpenCV') as a substitute for real project info. If the info is not in the context, do not provide general definitions.\n"
+        "- If information (project, skill, tech) is NOT in the CONTEXT, respond exactly with:\n"
+        "  - English: 'I don't have details about this in my available information.'\n"
+        "  - Roman Urdu: 'Mere paas iski details mojood nahi hain.'\n"
+        "- Never fabricate a list of projects if none exist in the context.\n\n"
         
-        "Context: {context}"
+        "LANGUAGE RULES:\n"
+        "- If the user writes in English, reply in professional English.\n"
+        "- If the user writes in Roman Urdu, reply in professional Pakistani Roman Urdu. Strictly avoid Hindi-influenced vocabulary (e.g., use 'aap ko' instead of 'aapko', 'istemaal' instead of 'upyog', 'skills' instead of 'kaushal').\n"
+        "- Maintain the language of the user throughout the response.\n\n"
+        
+        "TONE & FORMAT:\n"
+        "- Be concise, professional, and businesslike. Avoid repetitive canned paragraphs.\n"
+        "- Avoid excessive enthusiasm or filler phrases like 'Welcome!'.\n"
+        "- Mention Hammas's WhatsApp number (03111809562) ONLY when the user asks how to reach him, asks for info not available in the context, or needs further clarification.\n\n"
+        
+        "PRIVACY:\n"
+        "- Do not ask for or store personal information (name, email) during the conversation.\n\n"
+        
+        "Context:\n{context}"
     )
     
     prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{input}")])
@@ -97,20 +111,41 @@ def get_rag_chain():
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     return create_retrieval_chain(retriever, question_answer_chain)
 
-def get_semantic_answer(rag_chain, user_input, threshold=0.3):
+# --- 🧠 CUSTOM SEMANTIC CACHE LOGIC (SQLite Powered) ---
+def get_semantic_answer(rag_chain, user_input, threshold=0.7):
     semantic_cache = Chroma(persist_directory=CACHE_PATH, embedding_function=embeddings)
-    results = semantic_cache.similarity_search_with_score(user_input, k=1)
     
-    if results and results[0][1] < threshold:
-        print(f"🟢 CACHE HIT! Distance factor: {results[0][1]}")
-        return results[0][0].metadata["answer"]
+    # 1. Search
+    results = semantic_cache.similarity_search_with_score(user_input, k=6)
+    
+    if results:
+        best_match, distance = results[0]
+        if distance < threshold:
+            print(f"🟢 CACHE HIT! Score: {distance}")
+            return best_match.metadata["answer"]
 
-    print("🔴 CACHE MISS! Fetching live stream from Groq API...")
+    # 2. Miss -> Invoke Chain
+    print("🔴 CACHE MISS! Hitting Groq API...")
     response = rag_chain.invoke({"input": user_input})
     answer = response["answer"]
 
+    # 3. Save & Persist (Important step for permanent cache)
     semantic_cache.add_texts(texts=[user_input], metadatas=[{"answer": answer}])
+    # Chroma DB ko save karne ke liye persist karna zaroori hai
+    # Note: Modern Chroma versions mein persist automatic hota hai, 
+    # lekin verify kar lein agar aapka version purana hai.
+    
     return answer
+
+def get_specific_project_details(project_name):
+    # Vector DB se specific project search karein
+    vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+    # k=1 kyunke humein exact project chahiye
+    results = vector_db.similarity_search(project_name, k=1)
+    
+    if results:
+        return results[0].page_content
+    return "Project details not found."    
 
 if __name__ == "__main__":
     db = build_vector_db()
@@ -119,3 +154,6 @@ if __name__ == "__main__":
         chain = get_rag_chain()
         test_response = get_semantic_answer(chain, "Hi, Who is Hammas?")
         print(f"\nPipeline Test Response: {test_response}")
+
+
+
