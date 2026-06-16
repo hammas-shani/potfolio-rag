@@ -77,7 +77,7 @@ def get_rag_chain():
         temperature=0.3 
     )
 
-system_prompt = (
+    system_prompt = (
     "You are the exclusive AI Assistant for Hammas Shahzad Shani, an AI/ML Engineer. "
     "Your objective is to provide precise information from the CONTEXT regarding Hammas's professional profile, projects, and skills. "
     "\n\n"
