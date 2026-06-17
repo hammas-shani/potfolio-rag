@@ -21,6 +21,7 @@ load_dotenv()
 
 # Constants
 CHROMA_PATH = "vector_db"
+CACHE_PATH = "semantic_cache_db" # 🟢 Cache Path Add Kar Diya Hai
 DATA_PATH = "dataset"
 
 # Embeddings Function
@@ -47,7 +48,6 @@ def build_vector_db():
     md_docs = md_loader.load()
 
     documents = pdf_docs + md_docs
-    # --------------------------------------
     
     if not documents:
         print("⚠️ Koi documents nahi mile. Empty DB return kar raha hoon.")
@@ -90,7 +90,7 @@ def get_rag_chain():
     
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    # Aapka Final Strict System Prompt
+    # Strict System Prompt + Emergency Code Stop
     system_prompt = (
         "You are the exclusive AI Assistant for Hammas Shahzad Shani, an AI/ML Engineer. "
         "Your objective is to provide precise, professional, and context-grounded information regarding Hammas Shahzad Shani's professional profile, experience, projects, skills, certifications, education, achievements, and work. "
@@ -115,19 +115,13 @@ def get_rag_chain():
         "   - Never use external knowledge.\n"
         "   - Never make assumptions.\n"
         "   - Never infer missing information.\n"
-        "   - Never fabricate projects, experience, skills, achievements, education, certifications, timelines, or personal information.\n"
+        "   - Never fabricate projects, experience, skills, achievements, education, timelines, or personal information.\n"
         "\n"
         "3. NO HALLUCINATION:\n"
         "   - If information is not present in the CONTEXT, immediately return the appropriate refusal message.\n"
         "   - Do not guess.\n"
-        "   - Do not generate estimated answers.\n"
         "\n"
-        "4. NO CODE GENERATION (ABSOLUTE RESTRICTION):\n"
-        "   - Under NO circumstances generate source code, scripts, SQL queries, commands, APIs, configuration files, pseudocode, or code snippets.\n"
-        "   - Even if the user asks for code as an example of Hammas Shahzad Shani's work, skills, or projects, immediately refuse.\n"
-        "   - You may only describe projects at a high level if the information exists in the CONTEXT.\n"
-        "\n"
-        "5. NO GENERAL TECHNOLOGY EXPLANATIONS:\n"
+        "4. NO GENERAL TECHNOLOGY EXPLANATIONS:\n"
         "   - Never explain technologies such as FastAPI, LangChain, YOLO, TensorFlow, Python, or any other technology in general.\n"
         "   - You may only explain how Hammas Shahzad Shani used a technology in a project explicitly mentioned in the CONTEXT.\n"
         "\n\n"
@@ -137,18 +131,13 @@ def get_rag_chain():
         "- Avoid greetings, filler phrases, small talk, and unnecessary explanations.\n"
         "- Keep responses focused only on the user's question and the available CONTEXT.\n"
         "\n\n"
-        "CONTACT PROTOCOL:\n"
-        "- Only provide Hammas Shahzad Shani's WhatsApp number (03111809562) if the user explicitly asks for contact information.\n"
-        "- If information requested is unavailable in the CONTEXT, politely refuse and optionally provide the WhatsApp number for further inquiries.\n"
-        "- Do not proactively provide contact information.\n"
-        "\n\n"
-        "FINAL VALIDATION BEFORE RESPONDING:\n"
-        "- Is the question related to Hammas Shahzad Shani?\n"
-        "- Is the answer explicitly present in the CONTEXT?\n"
-        "- Does the response avoid code generation?\n"
-        "- Does the response mirror the user's language?\n"
-        "- Does the response avoid assumptions and hallucinations?\n"
-        "- If ANY answer is NO, return the appropriate refusal message.\n"
+        "FINAL VALIDATION AND EMERGENCY STOP (CRITICAL):\n"
+        "Before you output anything, run this internal check:\n"
+        "1. Does the user's prompt ask for code, scripts, algorithms (like TwoSum, Fibonacci), or programming help?\n"
+        "2. Does your planned response contain ANY code block (e.g., ```python), functions, syntax, or pseudo-code?\n"
+        "IF YES TO EITHER: YOU MUST IMMEDIATELY ABORT. DO NOT explain anything. DO NOT apologize. JUST output exactly this sentence and nothing else:\n"
+        "Refusal: 'Main sirf Hammas Shahzad Shani ke professional background aur projects ke baare mein maloomat de sakta hoon. Main programming code generate nahi kar sakta.'\n"
+        "3. Does the planned response contain information outside the CONTEXT? If YES, use the standard refusal.\n"
         "\n\n"
         "Context:\n{context}"
     )
@@ -164,14 +153,37 @@ def get_rag_chain():
     
     return rag_chain
 
-# Answer Retrieval Function
-def get_semantic_answer(rag_chain, user_input, chat_history=[]):
-    print("\n🤖 Hitting Groq API with Chat History...")
+# --- 🧠 SMART SEMANTIC CACHE LOGIC ---
+def get_semantic_answer(rag_chain, user_input, chat_history=[], threshold=0.4):
+    embeddings = get_embeddings_function()
+    semantic_cache = Chroma(persist_directory=CACHE_PATH, embedding_function=embeddings)
+    
+    # RULE: Cache sirf tab check karein jab chat_history khali ho (Pehla sawal ho)
+    # Taake "us k ilawa" jaise follow-up questions puranay cache se galat jawab na uthayen.
+    if not chat_history:
+        results = semantic_cache.similarity_search_with_score(user_input, k=1)
+        if results:
+            best_match, distance = results[0]
+            if distance < threshold:
+                print(f"\n🟢 CACHE HIT! Score: {distance:.4f} - Fetching instantly from DB...")
+                return best_match.metadata["answer"]
+
+    # Agar Cache mein nahi hai ya Chat History mojood hai, toh Groq API hit karein
+    print("\n🔴 CACHE MISS! Hitting Groq API with context & memory...")
     response = rag_chain.invoke({
         "input": user_input, 
         "chat_history": chat_history
     })
-    return response["answer"]
+    answer = response["answer"]
+
+    # RULE: Naya jawab cache mein sirf tab save karein jab yeh standalone sawal ho
+    if not chat_history:
+        semantic_cache.add_texts(
+            texts=[user_input], 
+            metadatas=[{"answer": answer}]
+        )
+    
+    return answer
 
 # Verification Block
 if __name__ == "__main__":
@@ -179,5 +191,8 @@ if __name__ == "__main__":
     if db:
         print("\n✅ System is Operational.")
         chain = get_rag_chain()
-        test_response = get_semantic_answer(chain, "Hi, Who is Hammas?", [])
+        
+        test_q = "Hi, Who is Hammas?"
+        print(f"\n👤 User: {test_q}")
+        test_response = get_semantic_answer(chain, test_q, [])
         print(f"🤖 AI Test: {test_response}")
