@@ -6,3 +6,5 @@ dataset/.venv/
 __pycache__/
 .langchain.db
 automations/
+vector_db/
+semantic_cache_db/
