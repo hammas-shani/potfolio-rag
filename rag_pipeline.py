@@ -2,156 +2,182 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Standard Document Object & Text Splitters (Zero dependency loaders)
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# Modern Standalone Vector Store & Embeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma  
-
-# Native LLM Framework Components
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-
-# =========================================================================
-# FIXED: v1.0+ Updates Ke Mutabiq Classic Packaging Import Patterns
-# =========================================================================
-from langchain_classic.chains import create_retrieval_chain
+# --- Imports ---
+from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_chroma import Chroma
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
+
+# Sahi Loaders Import Kiye Gaye Hain
+from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# Environment Variables
 load_dotenv()
 
-# Project Directories Configuration
-DATASET_DIR = "dataset"
+# Constants
 CHROMA_PATH = "vector_db"
-CACHE_PATH = "semantic_cache_db"
+DATA_PATH = "dataset"
 
-# Embeddings Core Instance
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+# Embeddings Function
+def get_embeddings_function():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+# Vector DB Builder
 def build_vector_db():
-    print("Reading data from dataset folder natively...")
-    docs = []
-    dataset_path = Path(DATASET_DIR)
+    if os.path.exists(CHROMA_PATH):
+        print(f"🔄 Loading existing Vector DB from {CHROMA_PATH}...")
+        return Chroma(persist_directory=CHROMA_PATH, embedding_function=get_embeddings_function())
     
-    if not dataset_path.exists():
-        os.makedirs(DATASET_DIR)
-        print(f"⚠️ '{DATASET_DIR}' directory created. Put your text resume files here!")
+    print("📁 Loading documents from data folder...")
+    if not os.path.exists(DATA_PATH):
+        os.makedirs(DATA_PATH)
+        print(f"⚠️ '{DATA_PATH}' folder nahi mila. Please create karein aur files dalein.")
         return None
 
-    # Native Python file scanning to avoid community deprecations
-    for file_path in dataset_path.rglob("*.*"):
-        if file_path.is_file() and file_path.suffix in ['.txt', '.md' , '.json']:
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    docs.append(Document(page_content=content, metadata={"source": str(file_path)}))
-            except Exception as e:
-                print(f"Error parsing file {file_path}: {e}")
+    # --- Sahi Loader Logic (Error Free) ---
+    pdf_loader = DirectoryLoader(DATA_PATH, glob="**/*.pdf", loader_cls=PyPDFLoader)
+    pdf_docs = pdf_loader.load()
 
-    if not docs:
-        print("❌ Dataset folder is empty! Please add files to parse.")
+    md_loader = DirectoryLoader(DATA_PATH, glob="**/*.md", loader_cls=TextLoader)
+    md_docs = md_loader.load()
+
+    documents = pdf_docs + md_docs
+    # --------------------------------------
+    
+    if not documents:
+        print("⚠️ Koi documents nahi mile. Empty DB return kar raha hoon.")
         return None
 
-    print(f"Successfully processed {len(docs)} document(s). Splitting into chunks...")
-    text_splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "\n", ".", " "], 
-        chunk_size=2000,
-        chunk_overlap=400
-    )
-    chunks = text_splitter.split_documents(docs)
+    print(f"📄 Processing {len(documents)} documents...")
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+    chunks = text_splitter.split_documents(documents)
+    
+    print(f"💾 Saving {len(chunks)} chunks to Chroma DB...")
+    db = Chroma.from_documents(chunks, get_embeddings_function(), persist_directory=CHROMA_PATH)
+    return db
 
-    print("Generating Vector Embeddings and compiling ChromaDB...")
-    vector_db = Chroma.from_documents(documents=chunks, embedding=embeddings, persist_directory=CHROMA_PATH)
-    print("✅ Vector DB Compiled Successfully!")
-    return vector_db
-
+# RAG Chain Setup
 def get_rag_chain():
+    embeddings = get_embeddings_function()
     vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
     retriever = vector_db.as_retriever(search_kwargs={"k": 6})
 
     llm = ChatGroq(
         groq_api_key=os.getenv("GROQ_API_KEY"),
         model_name="llama-3.1-8b-instant", 
-        temperature=0.3 
+        temperature=0.0  # Strict constraints
     )
 
+    # Memory Prompt
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+    
+    contextualize_q_prompt = ChatPromptTemplate.from_messages([
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+    
+    history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
+
+    # Aapka Final Strict System Prompt
     system_prompt = (
-    "You are the exclusive AI Assistant for Hammas Shahzad Shani, an AI/ML Engineer. "
-    "Your objective is to provide precise information from the CONTEXT regarding Hammas's professional profile, projects, and skills. "
-    "\n\n"
-    "STRICT LANGUAGE MIRRORING RULES:\n"
-    "- If the user asks in English, you MUST respond in professional English. DO NOT mix any Urdu words.\n"
-    "- If the user asks in Roman Urdu, you MUST respond in professional Pakistani Roman Urdu. DO NOT use any English sentences.\n"
-    "- Do not explain your language choice. Simply mirror the user's language.\n"
-    "\n\n"
-    "CRITICAL BEHAVIORAL RULES:\n"
-    "1. IDENTITY LOCK: You are NOT a general-purpose AI. If a user asks questions unrelated to Hammas Shahzad Shani (e.g., math, general knowledge, coding, 'how are you'), you must immediately decline.\n"
-    "   - Refusal (English): 'I can only assist with information related to Hammas Shahzad Shani and his professional work.'\n"
-    "   - Refusal (Roman Urdu): 'Main sirf Hammas Shahzad Shani aur unke professional kaam ke baare mein maloomat de sakta hoon.'\n"
-    "2. NO HALLUCINATION: ONLY state facts explicitly present in the provided CONTEXT. If the answer is not in the context, use the exact refusal phrases defined above.\n"
-    "3. NO GENERAL KNOWLEDGE: Never define technologies (e.g., 'What is FastAPI') unless it is directly explaining Hammas's specific project implementation.\n"
-    "\n\n"
-    "TONE & STYLE:\n"
-    "- Maintain a businesslike, concise, and professional tone.\n"
-    "- Avoid filler phrases ('Welcome', 'Hope you are doing well', etc.).\n"
-    "- Use Pakistani Roman Urdu (e.g., 'istemaal', 'skills') and strictly avoid Hindi vocabulary (e.g., 'upyog', 'kaushal').\n"
-    "\n\n"
-    "CONTACT PROTOCOL:\n"
-    "- Only provide Hammas's WhatsApp (03111809562) if the user specifically asks for contact info or if you have failed to answer a question regarding his background.\n"
-    "\n\n"
-    "Context:\n{context}"
-)
+        "You are the exclusive AI Assistant for Hammas Shahzad Shani, an AI/ML Engineer. "
+        "Your objective is to provide precise, professional, and context-grounded information regarding Hammas Shahzad Shani's professional profile, experience, projects, skills, certifications, education, achievements, and work. "
+        "\n\n"
+        "STRICT LANGUAGE MIRRORING RULES:\n"
+        "- If the user asks in English, you MUST respond in professional English. DO NOT mix Urdu words.\n"
+        "- If the user asks in Roman Urdu, you MUST respond in professional Pakistani Roman Urdu. DO NOT use English sentences.\n"
+        "- Use natural Pakistani Roman Urdu vocabulary.\n"
+        "- Avoid Hindi words such as 'upyog', 'anusaar', 'kaushal', and 'prayog'.\n"
+        "- Prefer words such as 'istemaal', 'mutabiq', 'maharat', and 'tajurba'.\n"
+        "- Do not explain your language choice. Simply mirror the user's language.\n"
+        "\n\n"
+        "CRITICAL BEHAVIORAL RULES:\n"
+        "1. IDENTITY LOCK (HIGHEST PRIORITY): You are NOT a general-purpose AI assistant.\n"
+        "   - You must ONLY answer questions directly related to Hammas Shahzad Shani and the provided CONTEXT.\n"
+        "   - If a user asks about general knowledge, mathematics, coding problems, technology explanations, current events, opinions, greetings, or anything unrelated to Hammas Shahzad Shani, immediately refuse.\n"
+        "   - Refusal (English): 'I can only assist with information related to Hammas Shahzad Shani and his professional work.'\n"
+        "   - Refusal (Roman Urdu): 'Main sirf Hammas Shahzad Shani aur unke professional kaam ke baare mein maloomat de sakta hoon.'\n"
+        "\n"
+        "2. CONTEXT-ONLY POLICY:\n"
+        "   - ONLY use information explicitly available in the provided CONTEXT.\n"
+        "   - Never use external knowledge.\n"
+        "   - Never make assumptions.\n"
+        "   - Never infer missing information.\n"
+        "   - Never fabricate projects, experience, skills, achievements, education, certifications, timelines, or personal information.\n"
+        "\n"
+        "3. NO HALLUCINATION:\n"
+        "   - If information is not present in the CONTEXT, immediately return the appropriate refusal message.\n"
+        "   - Do not guess.\n"
+        "   - Do not generate estimated answers.\n"
+        "\n"
+        "4. NO CODE GENERATION (ABSOLUTE RESTRICTION):\n"
+        "   - Under NO circumstances generate source code, scripts, SQL queries, commands, APIs, configuration files, pseudocode, or code snippets.\n"
+        "   - Even if the user asks for code as an example of Hammas Shahzad Shani's work, skills, or projects, immediately refuse.\n"
+        "   - You may only describe projects at a high level if the information exists in the CONTEXT.\n"
+        "\n"
+        "5. NO GENERAL TECHNOLOGY EXPLANATIONS:\n"
+        "   - Never explain technologies such as FastAPI, LangChain, YOLO, TensorFlow, Python, or any other technology in general.\n"
+        "   - You may only explain how Hammas Shahzad Shani used a technology in a project explicitly mentioned in the CONTEXT.\n"
+        "\n\n"
+        "TONE & STYLE:\n"
+        "- Maintain a professional, business-oriented, and concise tone.\n"
+        "- Be factual and direct.\n"
+        "- Avoid greetings, filler phrases, small talk, and unnecessary explanations.\n"
+        "- Keep responses focused only on the user's question and the available CONTEXT.\n"
+        "\n\n"
+        "CONTACT PROTOCOL:\n"
+        "- Only provide Hammas Shahzad Shani's WhatsApp number (03111809562) if the user explicitly asks for contact information.\n"
+        "- If information requested is unavailable in the CONTEXT, politely refuse and optionally provide the WhatsApp number for further inquiries.\n"
+        "- Do not proactively provide contact information.\n"
+        "\n\n"
+        "FINAL VALIDATION BEFORE RESPONDING:\n"
+        "- Is the question related to Hammas Shahzad Shani?\n"
+        "- Is the answer explicitly present in the CONTEXT?\n"
+        "- Does the response avoid code generation?\n"
+        "- Does the response mirror the user's language?\n"
+        "- Does the response avoid assumptions and hallucinations?\n"
+        "- If ANY answer is NO, return the appropriate refusal message.\n"
+        "\n\n"
+        "Context:\n{context}"
+    )
+
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
+    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     
-    prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{input}")])
+    return rag_chain
 
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    return create_retrieval_chain(retriever, question_answer_chain)
+# Answer Retrieval Function
+def get_semantic_answer(rag_chain, user_input, chat_history=[]):
+    print("\n🤖 Hitting Groq API with Chat History...")
+    response = rag_chain.invoke({
+        "input": user_input, 
+        "chat_history": chat_history
+    })
+    return response["answer"]
 
-# --- 🧠 CUSTOM SEMANTIC CACHE LOGIC (SQLite Powered) ---
-def get_semantic_answer(rag_chain, user_input, threshold=0.7):
-    semantic_cache = Chroma(persist_directory=CACHE_PATH, embedding_function=embeddings)
-    
-    # 1. Search
-    results = semantic_cache.similarity_search_with_score(user_input, k=6)
-    
-    if results:
-        best_match, distance = results[0]
-        if distance < threshold:
-            print(f"🟢 CACHE HIT! Score: {distance}")
-            return best_match.metadata["answer"]
-
-    # 2. Miss -> Invoke Chain
-    print("🔴 CACHE MISS! Hitting Groq API...")
-    response = rag_chain.invoke({"input": user_input})
-    answer = response["answer"]
-
-    # 3. Save & Persist (Important step for permanent cache)
-    semantic_cache.add_texts(texts=[user_input], metadatas=[{"answer": answer}])
-    # Chroma DB ko save karne ke liye persist karna zaroori hai
-    # Note: Modern Chroma versions mein persist automatic hota hai, 
-    # lekin verify kar lein agar aapka version purana hai.
-    
-    return answer
-
-def get_specific_project_details(project_name):
-    # Vector DB se specific project search karein
-    vector_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-    # k=1 kyunke humein exact project chahiye
-    results = vector_db.similarity_search(project_name, k=1)
-    
-    if results:
-        return results[0].page_content
-    return "Project details not found."    
-
+# Verification Block
 if __name__ == "__main__":
     db = build_vector_db()
     if db:
-        print("\nVerifying operational integrity...")
+        print("\n✅ System is Operational.")
         chain = get_rag_chain()
-        test_response = get_semantic_answer(chain, "Hi, Who is Hammas?")
-        print(f"\nPipeline Test Response: {test_response}")
-
-
-
+        test_response = get_semantic_answer(chain, "Hi, Who is Hammas?", [])
+        print(f"🤖 AI Test: {test_response}")
