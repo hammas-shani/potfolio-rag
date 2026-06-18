@@ -152,3 +152,30 @@ Problem Solving, Critical Thinking, Team Collaboration, Fast Learning, Communica
 - **Rent-a-Car System:** Dart[cite: 1].
 - **Book Splitter:** Python, Docker[cite: 1].
 - **Teachable Machine:** TensorFlow.js, Keras, Docker[cite: 1].
+
+### Auto-Fetched GitHub Repositories
+#### Potfolio Rag
+- **Description:** No description provided.
+- **Primary Technology:** Python
+- **GitHub Link:** https://github.com/hammas-shani/potfolio-rag
+
+#### Todoapp
+- **Description:** No description provided.
+- **Primary Technology:** Multiple Technologies
+- **GitHub Link:** https://github.com/hammas-shani/todoapp
+
+#### Teachable Machine
+- **Description:** No description provided.
+- **Primary Technology:** Python
+- **GitHub Link:** https://github.com/hammas-shani/teachable-machine
+
+#### Task Digital Graphix
+- **Description:** No description provided.
+- **Primary Technology:** TypeScript
+- **GitHub Link:** https://github.com/hammas-shani/task-digital-graphix
+
+#### School Uniform Detection Using Yolo
+- **Description:** No description provided.
+- **Primary Technology:** Jupyter Notebook
+- **GitHub Link:** https://github.com/hammas-shani/School-Uniform-Detection-using-yolo
+
