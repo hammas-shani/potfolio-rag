@@ -179,3 +179,11 @@ Problem Solving, Critical Thinking, Team Collaboration, Fast Learning, Communica
 - **Primary Technology:** Jupyter Notebook
 - **GitHub Link:** https://github.com/hammas-shani/School-Uniform-Detection-using-yolo
 
+
+
+### Auto-Fetched GitHub Repositories
+#### Ai Trainer 
+- **Description:** No description provided.
+- **Primary Technology:** Python
+- **GitHub Link:** https://github.com/hammas-shani/ai-trainer-
+
